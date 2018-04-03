@@ -4,7 +4,9 @@ extern crate servo;
 use servo::gl;
 use glutin::GlContext;
 use servo::BrowserId;
+use servo::script_traits;
 use servo::compositing::compositor_thread::EventLoopWaker;
+use servo::compositing::windowing::MouseWindowEvent::Click;
 use servo::compositing::windowing::{WindowEvent, WindowMethods};
 use servo::euclid::{Point2D, Size2D, TypedPoint2D, TypedRect, TypedScale, TypedSize2D,
                     TypedVector2D};
@@ -12,13 +14,10 @@ use servo::ipc_channel::ipc;
 use servo::msg::constellation_msg::{Key, KeyModifiers};
 use servo::net_traits::net_error_list::NetError;
 use servo::script_traits::{LoadData, TouchEventType};
-use servo::servo_config::opts;
-use servo::servo_config::resource_files::set_resources_path;
 use servo::servo_geometry::DeviceIndependentPixel;
 use servo::servo_url::ServoUrl;
 use servo::style_traits::DevicePixel;
 use servo::style_traits::cursor::CursorKind;
-use std::env;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -26,6 +25,9 @@ pub struct GlutinEventLoopWaker {
     proxy: Arc<glutin::EventsLoopProxy>,
 }
 
+///
+/// this proxy is called by Servo itself
+///
 impl EventLoopWaker for GlutinEventLoopWaker {
     // Use by servo to share the "event loop waker" across threads
     fn clone(&self) -> Box<EventLoopWaker + Send> {
@@ -46,11 +48,9 @@ struct Window {
 }
 
 fn main() {
-    println!("Servo version: {}", servo::config::servo_version());
-
     let mut event_loop = glutin::EventsLoop::new();
-
-    let builder = glutin::WindowBuilder::new().with_dimensions(800, 600);
+    let monitor = event_loop.get_available_monitors().nth(0);
+    let builder = glutin::WindowBuilder::new().with_fullscreen(monitor);
     let gl_version = glutin::GlRequest::Specific(glutin::Api::OpenGl, (3, 2));
     let context = glutin::ContextBuilder::new()
         .with_gl(gl_version)
@@ -71,11 +71,6 @@ fn main() {
         proxy: Arc::new(event_loop.create_proxy()),
     });
 
-    let path = env::current_dir().unwrap().join("resources");
-    let path = path.to_str().unwrap().to_string();
-    set_resources_path(Some(path));
-    opts::set_defaults(opts::default_opts());
-
     let window = Rc::new(Window {
         glutin_window: window,
         waker: event_loop_waker,
@@ -84,7 +79,7 @@ fn main() {
 
     let mut servo = servo::Servo::new(window.clone());
 
-    let url = ServoUrl::parse("https://servo.org").unwrap();
+    let url = ServoUrl::parse("https://www.rust-lang.org/en-US/").unwrap();
     let (sender, receiver) = ipc::channel().unwrap();
     servo.handle_events(vec![WindowEvent::NewBrowser(url, sender)]);
     let browser_id = receiver.recv().unwrap();
@@ -114,25 +109,50 @@ fn main() {
                 servo.handle_events(vec![event]);
             }
 
-            // reload when R is pressed
+            // Mouseinput
+            glutin::Event::WindowEvent {
+                event:
+                    glutin::WindowEvent::MouseInput {
+                        button: glutin::MouseButton::Left,
+                        state: glutin::ElementState::Pressed,
+                        ..
+                    },
+                ..
+            } => {
+                let pointer = TypedPoint2D::new(pointer.0 as f32, pointer.1 as f32);
+                let event = WindowEvent::MouseWindowEventClass(Click(
+                    script_traits::MouseButton::Left,
+                    pointer,
+                ));
+                servo.handle_events(vec![event]);
+            }
+
+            // Keyboard support
             glutin::Event::WindowEvent {
                 event:
                     glutin::WindowEvent::KeyboardInput {
                         input:
                             glutin::KeyboardInput {
                                 state: glutin::ElementState::Pressed,
-                                virtual_keycode: Some(glutin::VirtualKeyCode::R),
+                                virtual_keycode: None,
+                                modifiers:
+                                    glutin::ModifiersState {
+                                        shift: false,
+                                        ctrl: false,
+                                        alt: false,
+                                        logo: true,
+                                    },
                                 ..
                             },
                         ..
                     },
                 ..
             } => {
-                let event = WindowEvent::Reload(browser_id);
-                servo.handle_events(vec![event]);
+                //let _event = WindowEvent::KeyEvent(glutin::ElementState::Pressed);
+                servo.handle_events(vec![]);
             }
 
-            // Scrolling
+            // Borrowed from https://github.com/paulrouget/servo-embedding-example
             glutin::Event::WindowEvent {
                 event: glutin::WindowEvent::MouseWheel { delta, phase, .. },
                 ..
